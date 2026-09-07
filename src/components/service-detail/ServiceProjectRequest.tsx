@@ -104,19 +104,26 @@ export default function ServiceProjectRequest({
     };
   }, [isUploading, isSubmitting]);
 
-  // Clean up any generated object URLs on unmount
+  // Keep managedFiles ref synchronized for safe unmount cleanup without triggering effect re-runs
+  const managedFilesRef = useRef<ManagedUploadFile[]>(managedFiles);
+  useEffect(() => {
+    managedFilesRef.current = managedFiles;
+  }, [managedFiles]);
+
+  // DEDICATED UNMOUNT-ONLY EFFECT: Abort active in-flight XHR and revoke object URLs strictly on component unmount
   useEffect(() => {
     return () => {
-      managedFiles.forEach((f) => {
+      if (activeXhrRef.current) {
+        activeXhrRef.current.abort();
+        activeXhrRef.current = null;
+      }
+      managedFilesRef.current.forEach((f) => {
         if (f.previewUrl) {
           URL.revokeObjectURL(f.previewUrl);
         }
       });
-      if (activeXhrRef.current) {
-        activeXhrRef.current.abort();
-      }
     };
-  }, [managedFiles]);
+  }, []);
 
   const isAcceptedFileType = (file: File, acceptedList: string[]): boolean => {
     if (!acceptedList || acceptedList.length === 0) return true;
@@ -289,10 +296,23 @@ export default function ServiceProjectRequest({
   };
 
   // UPLOAD A SINGLE FILE WITH REAL XHR PROGRESS
-  const uploadSingleFile = (fileItem: ManagedUploadFile): Promise<{ success: boolean; fileId?: string; error?: string }> => {
+  const uploadSingleFile = (
+    fileItem: ManagedUploadFile
+  ): Promise<{
+    success: boolean;
+    fileId?: string;
+    requestId?: string;
+    ownerToken?: string;
+    error?: string;
+  }> => {
     return new Promise((resolve) => {
       if (fileItem.status === 'uploaded' && fileItem.fileId) {
-        resolve({ success: true, fileId: fileItem.fileId });
+        resolve({
+          success: true,
+          fileId: fileItem.fileId,
+          requestId: fileItem.requestId || requestId,
+          ownerToken: fileItem.ownerToken
+        });
         return;
       }
 
@@ -332,7 +352,12 @@ export default function ServiceProjectRequest({
                   : f
               )
             );
-            resolve({ success: true, fileId: res.fileId });
+            resolve({
+              success: true,
+              fileId: res.fileId,
+              requestId: res.requestId || requestId,
+              ownerToken: res.ownerToken
+            });
           } catch {
             setManagedFiles((prev) =>
               prev.map((f) => (f.id === fileItem.id ? { ...f, status: 'error', error: 'Invalid response from server.' } : f))
@@ -441,6 +466,24 @@ export default function ServiceProjectRequest({
     isCancelledRef.current = false;
 
     // STEP 1: Upload all files that have not yet reached the backend
+    // Collect successful uploads locally inside handleSubmit to avoid asynchronous React state lag
+    const successfulUploads: Array<{
+      fileId: string;
+      requestId: string;
+      ownerToken?: string;
+    }> = [];
+
+    // Retain any files that were already successfully uploaded (e.g. from previous retries)
+    for (const f of managedFiles) {
+      if (f.status === 'uploaded' && f.fileId) {
+        successfulUploads.push({
+          fileId: f.fileId,
+          requestId: f.requestId || requestId,
+          ownerToken: f.ownerToken
+        });
+      }
+    }
+
     const pendingFiles = managedFiles.filter((f) => f.status !== 'uploaded');
     if (pendingFiles.length > 0) {
       setIsUploading(true);
@@ -457,6 +500,13 @@ export default function ServiceProjectRequest({
             }
             return;
           }
+          if (res.fileId) {
+            successfulUploads.push({
+              fileId: res.fileId,
+              requestId: res.requestId || requestId,
+              ownerToken: res.ownerToken
+            });
+          }
         }
       }
       setIsUploading(false);
@@ -464,18 +514,10 @@ export default function ServiceProjectRequest({
 
     if (isCancelledRef.current) return;
 
-    // STEP 2: Finalize commission project request and stage for Google Drive pipeline
+    // STEP 2: Finalize commission project request using the exact local upload results
     setIsSubmitting(true);
     try {
-      // Re-read fileIds and ownerTokens from currently uploaded files
-      const uploadedFiles = managedFiles
-        .filter((f) => f.status === 'uploaded' && f.fileId)
-        .map((f) => ({
-          fileId: f.fileId as string,
-          requestId: f.requestId || requestId,
-          ownerToken: f.ownerToken
-        }));
-
+      const uploadedFiles = successfulUploads;
       const uploadedFileIds = uploadedFiles.map((f) => f.fileId);
 
       const response = await fetch('/api/projects/submit', {
@@ -859,7 +901,7 @@ export default function ServiceProjectRequest({
               <div className="pt-2">
                 <label
                   htmlFor="content-policy-consent"
-                  className="flex items-start gap-3 cursor-pointer group select-none"
+                  className="flex items-start gap-3 cursor-pointer group select-none py-1"
                 >
                   <div className="relative flex items-center justify-center mt-0.5 shrink-0">
                     <input
@@ -872,10 +914,19 @@ export default function ServiceProjectRequest({
                         setHasConfirmedPolicy(e.target.checked);
                         if (error && error.includes('Content Policy')) setError(null);
                       }}
-                      className="peer sr-only"
+                      className="sr-only peer"
                     />
-                    <div className="w-5 h-5 rounded border border-foreground/30 bg-white peer-checked:bg-[#D4AF37] peer-checked:border-[#D4AF37] peer-focus-visible:ring-2 peer-focus-visible:ring-[#D4AF37] transition-all flex items-center justify-center shadow-xs">
-                      <Check className="w-3.5 h-3.5 text-white opacity-0 peer-checked:opacity-100 transition-opacity" />
+                    <div
+                      aria-hidden="true"
+                      className={`w-5 h-5 rounded border transition-all duration-200 flex items-center justify-center ${
+                        hasConfirmedPolicy
+                          ? 'bg-[#D4AF37] border-[#D4AF37] shadow-xs'
+                          : 'bg-white border-foreground/30 group-hover:border-[#D4AF37] shadow-xs'
+                      } peer-focus-visible:ring-2 peer-focus-visible:ring-[#D4AF37] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-background`}
+                    >
+                      {hasConfirmedPolicy && (
+                        <Check className="w-3.5 h-3.5 stroke-[3.5] text-[#0D0D0F]" />
+                      )}
                     </div>
                   </div>
                   <span className="text-xs text-foreground/80 group-hover:text-foreground transition-colors leading-relaxed">
