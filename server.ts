@@ -33,7 +33,7 @@ import {
  * - Idempotent Operations: Repeated delete/submit handled gracefully without duplicate artifacts
  */
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 8080;
 const HOST = '0.0.0.0';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB per file
