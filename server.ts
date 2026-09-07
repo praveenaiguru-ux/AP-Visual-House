@@ -19,6 +19,10 @@ import {
   getDriveRedirectUri,
   GOOGLE_DRIVE_SCOPE
 } from './server/driveAuth';
+import {
+  transferConfirmedProjectToDrive,
+  DriveTransferResult
+} from './server/driveTransfer';
 
 /**
  * AP VISUAL HOUSE — CLOUD RUN BACKEND SERVICE
@@ -706,8 +710,44 @@ async function startServer() {
       }
 
       const projectId = 'APV-' + Date.now().toString(36).toUpperCase();
+      const submittedAt = new Date().toISOString();
+
+      let finalRequestId = incomingRequestId;
+      if (!finalRequestId || !SAFE_REQUEST_ID_REGEX.test(finalRequestId)) {
+        finalRequestId = validRecords[0]?.requestId || ('req_' + crypto.randomBytes(8).toString('hex'));
+      }
 
       console.log(`[PROJECT CONFIRMED] ${projectId} for ${serviceName} by ${name} (${whatsapp}) with ${confirmedFiles.length} file(s) in confirmed storage.`);
+
+      // PHASE 5.3B: CONFIRMED GCS -> OWNER GOOGLE DRIVE TRANSFER
+      // GCS confirmation remains authoritative: if Drive transfer is pending or fails,
+      // confirmed GCS files are NEVER deleted and a controlled safe response is returned.
+      let driveTransferResult: DriveTransferResult | null = null;
+      try {
+        driveTransferResult = await transferConfirmedProjectToDrive({
+          requestId: finalRequestId,
+          service: serviceName,
+          customer: name,
+          contact: whatsapp,
+          email: email || undefined,
+          requirement: requirements || undefined,
+          startingQuote: startingPrice ? `${currency || ''}${startingPrice}` : undefined,
+          submittedAt,
+          files: confirmedFiles.map(cf => ({ fileId: cf.fileId }))
+        });
+      } catch (driveErr: any) {
+        console.error(`[DRIVE] Transfer failed for request ${finalRequestId}:`, driveErr?.message || driveErr);
+        driveTransferResult = {
+          success: false,
+          transferredFiles: 0,
+          alreadyPresentFiles: 0,
+          failedFiles: confirmedFiles.length,
+          metadataUpdated: false,
+          error: driveErr?.message || 'Drive transfer temporarily unavailable'
+        };
+      }
+
+      const isDriveSuccess = driveTransferResult?.success === true;
 
       res.status(200).json({
         success: true,
@@ -721,7 +761,14 @@ async function startServer() {
         currency,
         filesAttached: confirmedFiles.length,
         confirmedFiles,
-        message: 'Project request received and secured in private confirmed storage.'
+        driveTransfer: {
+          status: isDriveSuccess ? 'completed' : 'pending',
+          transferredFiles: driveTransferResult?.transferredFiles || 0,
+          alreadyPresentFiles: driveTransferResult?.alreadyPresentFiles || 0
+        },
+        message: isDriveSuccess
+          ? 'Project request received and secured in confirmed storage and owner Google Drive.'
+          : 'Project request received and secured in private confirmed storage. Owner storage transfer is pending.'
       });
     } catch (err: any) {
       console.error('[SUBMISSION ERROR]', err);

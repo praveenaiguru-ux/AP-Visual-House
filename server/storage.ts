@@ -450,6 +450,107 @@ class StorageProvider {
     }
   }
 
+  // --- GET CONFIRMED FILE METADATA ---
+  public async getConfirmedFile(fileId: string, requestId: string): Promise<StagedFileRecord | null> {
+    if (!SAFE_FILE_ID_REGEX.test(fileId) || !SAFE_REQUEST_ID_REGEX.test(requestId)) {
+      return null;
+    }
+
+    const confirmedKey = `confirmed/${requestId}/${fileId}`;
+
+    // 1. Explicit Development/Test Emulator
+    if (this.isEmulatorMode) {
+      const metaPath = path.join(this.emulatorDir, 'confirmed', requestId, `${fileId}.meta.json`);
+      if (!fs.existsSync(metaPath)) return null;
+      try {
+        const raw = fs.readFileSync(metaPath, 'utf-8');
+        return JSON.parse(raw) as StagedFileRecord;
+      } catch {
+        return null;
+      }
+    }
+
+    // 2. Production / Real Google Cloud Storage (Fail-Closed)
+    try {
+      const bucket = this.getBucket();
+      const file = bucket.file(confirmedKey);
+      const [exists] = await file.exists().catch((e) => {
+        if (e?.code === 403 || e?.code === 401) {
+          throw e;
+        }
+        return [false];
+      });
+      if (!exists) return null;
+
+      const [meta] = await file.getMetadata();
+      return this.parseGcsMetadata(confirmedKey, meta);
+    } catch (err: any) {
+      console.error(`[STORAGE FAIL-CLOSED] Failed to query confirmed object from Google Cloud Storage (${confirmedKey}):`, err);
+      throw new StorageServiceError(
+        `Failed to query confirmed cloud storage: ${err?.message || 'Storage query failed'}`,
+        503,
+        'Secure cloud storage service is currently unavailable. Please try again later.'
+      );
+    }
+  }
+
+  // --- GET CONFIRMED FILE READ STREAM (FOR ZERO-MEMORY DRIVE STREAMING) ---
+  public async getConfirmedFileStream(
+    fileId: string,
+    requestId: string
+  ): Promise<{ stream: NodeJS.ReadableStream; record: StagedFileRecord } | null> {
+    if (!SAFE_FILE_ID_REGEX.test(fileId) || !SAFE_REQUEST_ID_REGEX.test(requestId)) {
+      return null;
+    }
+
+    const confirmedKey = `confirmed/${requestId}/${fileId}`;
+
+    // 1. Explicit Development/Test Emulator
+    if (this.isEmulatorMode) {
+      const confDir = path.join(this.emulatorDir, 'confirmed', requestId);
+      const dataPath = path.join(confDir, `${fileId}.data`);
+      const metaPath = path.join(confDir, `${fileId}.meta.json`);
+
+      if (!fs.existsSync(dataPath) || !fs.existsSync(metaPath)) {
+        return null;
+      }
+
+      try {
+        const raw = fs.readFileSync(metaPath, 'utf-8');
+        const record = JSON.parse(raw) as StagedFileRecord;
+        const stream = fs.createReadStream(dataPath);
+        return { stream, record };
+      } catch {
+        return null;
+      }
+    }
+
+    // 2. Production / Real Google Cloud Storage (Fail-Closed)
+    try {
+      const bucket = this.getBucket();
+      const file = bucket.file(confirmedKey);
+      const [exists] = await file.exists().catch((e) => {
+        if (e?.code === 403 || e?.code === 401) {
+          throw e;
+        }
+        return [false];
+      });
+      if (!exists) return null;
+
+      const [meta] = await file.getMetadata();
+      const record = this.parseGcsMetadata(confirmedKey, meta);
+      const stream = file.createReadStream();
+      return { stream, record };
+    } catch (err: any) {
+      console.error(`[STORAGE FAIL-CLOSED] Failed to stream confirmed object from Google Cloud Storage (${confirmedKey}):`, err);
+      throw new StorageServiceError(
+        `Failed to stream from confirmed cloud storage: ${err?.message || 'Storage stream failed'}`,
+        503,
+        'Secure cloud storage service is currently unavailable. Please try again later.'
+      );
+    }
+  }
+
   // --- APPLICATION SWEEP OF EXPIRED TEMPORARY OBJECTS (OPTIMIZATION LAYER) ---
   public async cleanupExpiredTemporary(): Promise<{ scanned: number; expired: number }> {
     let scanned = 0;
