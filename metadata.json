@@ -1,0 +1,6 @@
+{
+  "name": "AP Visual House",
+  "description": "Premium creative visual services. Ideas. Made Visual.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
