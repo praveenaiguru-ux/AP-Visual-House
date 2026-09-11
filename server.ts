@@ -948,15 +948,3 @@ export async function createApp() {
   return app;
 }
 
-async function startServer() {
-  const app = await createApp();
-
-  app.listen(PORT, HOST, () => {
-    console.log(`AP Visual House server running on http://${HOST}:${PORT}`);
-    console.log(`Storage Mode: ${storageProvider.isUsingGCS() ? 'Google Cloud Storage' : 'Durable Emulation'} (Retention: ${RETENTION_HOURS}h)`);
-  });
-}
-
-if (process.argv[1] && new URL(`file://${process.argv[1]}`).href === import.meta.url) {
-  startServer();
-}
