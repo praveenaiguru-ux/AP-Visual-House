@@ -9,7 +9,12 @@ import {
   StoredProjectMetadata
 } from './driveTransfer';
 import { storageProvider, StagedFileRecord } from './storage';
-import { _resetTokenCacheForTesting } from './driveAuth';
+import {
+  _resetTokenCacheForTesting,
+  _setDriveAuthFailureForTesting
+} from './driveAuth';
+
+const TEST_PROJECT_REFERENCE = 'APV-2609-T3ST';
 
 // Mock in-memory Drive structure for deterministic unit tests
 interface MockDriveItem {
@@ -148,9 +153,13 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
   // 1. Drive OAuth unavailable -> controlled failure
   it('1. Drive OAuth unavailable -> controlled failure without crash', async () => {
     const requestId = 'req_test_no_auth_' + Date.now();
-    // Default call without override will attempt to get credentials and fail safely
+
+    // Explicitly simulate OAuth failure without touching real credentials.
+    _setDriveAuthFailureForTesting(true);
+
     const result = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Praveen',
       contact: '+919999999999',
       files: []
@@ -160,6 +169,8 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     assert.equal(typeof result.error, 'string');
     assert.match(result.error || '', /Google Drive/i);
     assert.equal(result.transferredFiles, 0);
+
+    _setDriveAuthFailureForTesting(false);
   });
 
   // 2. Root folder creation
@@ -233,6 +244,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
 
     const result = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       service: '3D Architectural Rendering',
       customer: 'Praveen',
       contact: '+919999999999',
@@ -248,7 +260,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     assert.equal(result.metadataUpdated, true);
 
     // Verify file exists in mock Drive
-    const transferred = mockDrive._items.find((i: MockDriveItem) => i.name === 'architectural_render.png');
+    const transferred = mockDrive._items.find((i: MockDriveItem) => i.name === 'Upload-01.png');
     assert.ok(transferred);
     assert.equal(transferred.content, 'render-data-bytes');
   });
@@ -262,6 +274,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     // First transfer
     const res1 = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Praveen',
       contact: '+919999999999',
       submittedAt: '2026-09-07T12:00:00Z',
@@ -274,6 +287,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     // Second transfer (exact same request)
     const res2 = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Praveen',
       contact: '+919999999999',
       submittedAt: '2026-09-07T12:00:00Z',
@@ -285,7 +299,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     assert.equal(res2.failedFiles, 0);
 
     // Verify only ONE copy of the file exists in the folder
-    const fileCopies = mockDrive._items.filter((i: MockDriveItem) => i.name === 'floor_plan.pdf');
+    const fileCopies = mockDrive._items.filter((i: MockDriveItem) => i.name === 'Upload-01.pdf');
     assert.equal(fileCopies.length, 1);
   });
 
@@ -297,6 +311,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
 
     await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       service: 'Façade Design',
       customer: 'Praveen Guuru',
       contact: '+919876543210',
@@ -313,7 +328,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     assert.ok(metaItem.content);
 
     const parsed: StoredProjectMetadata = JSON.parse(metaItem.content);
-    assert.equal(parsed.reference, requestId);
+    assert.equal(parsed.projectReference, TEST_PROJECT_REFERENCE);
     assert.equal(parsed.service, 'Façade Design');
     assert.equal(parsed.customerName, 'Praveen Guuru');
     assert.equal(parsed.contact, '+919876543210');
@@ -323,7 +338,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     assert.equal(parsed.contentPolicyAccepted, true);
     assert.equal(parsed.driveTransferStatus, 'completed');
     assert.equal(parsed.files.length, 1);
-    assert.equal(parsed.files[0].sanitizedName, 'elevation.jpg');
+    assert.equal(parsed.files[0].driveFileName, 'Upload-01.jpg');
   });
 
   // 10. Metadata JSON update/reuse
@@ -334,6 +349,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
 
     await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Initial Customer',
       contact: '+1111111111',
       files: [{ fileId: confirmed.fileId }],
@@ -343,6 +359,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     // Update with new customer info
     await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Updated Customer',
       contact: '+2222222222',
       files: [{ fileId: confirmed.fileId }],
@@ -367,6 +384,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
 
     const result = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Multi File Client',
       contact: '+919999999999',
       files: [{ fileId: f1.fileId }, { fileId: f2.fileId }, { fileId: f3.fileId }],
@@ -378,7 +396,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     assert.equal(result.failedFiles, 0);
 
     const transferred = mockDrive._items.filter((i: MockDriveItem) =>
-      ['cam1.jpg', 'cam2.jpg', 'cam3.jpg'].includes(i.name)
+      ['Upload-01.jpg', 'Upload-02.jpg', 'Upload-03.jpg'].includes(i.name)
     );
     assert.equal(transferred.length, 3);
   });
@@ -399,6 +417,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
 
     const result = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Preserve Test',
       contact: '+919999999999',
       files: [{ fileId: confirmed.fileId }],
@@ -421,6 +440,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
       async () => {
         await transferConfirmedProjectToDrive({
           requestId: '../../bad_path_injection',
+          projectReference: TEST_PROJECT_REFERENCE,
           customer: 'Test',
           contact: '123',
           files: []
@@ -436,6 +456,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
       async () => {
         await transferConfirmedProjectToDrive({
           requestId: 'req_valid_1234',
+          projectReference: TEST_PROJECT_REFERENCE,
           customer: 'Test',
           contact: '123',
           files: [{ fileId: 'bad_id_not_matching_regex' }]
@@ -453,6 +474,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
 
     const result = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Security Auditor',
       contact: '+919999999999',
       files: [{ fileId: confirmed.fileId }],
@@ -500,9 +522,21 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     const confirmed = await storageProvider.promoteToConfirmed(fileId, requestId);
     assert.equal(confirmed.status, 'confirmed');
 
+    // 2b. Promotion must retain the temporary copy until Drive succeeds.
+    const temporaryAfterPromotion = await storageProvider.getTemporaryFile(fileId, requestId);
+    assert.ok(temporaryAfterPromotion);
+    assert.equal(temporaryAfterPromotion.fileId, fileId);
+    assert.equal(temporaryAfterPromotion.status, 'temporary');
+
+    const confirmedAfterPromotion = await storageProvider.getConfirmedFile(fileId, requestId);
+    assert.ok(confirmedAfterPromotion);
+    assert.equal(confirmedAfterPromotion.fileId, fileId);
+    assert.equal(confirmedAfterPromotion.status, 'confirmed');
+
     // 3. Transfer to Drive
     const driveResult = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       service: 'Photo Retouching',
       customer: 'Praveen',
       contact: '+919999999999',
@@ -513,6 +547,43 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
 
     assert.equal(driveResult.success, true);
     assert.equal(driveResult.transferredFiles, 1);
+  });
+
+  // 17. Confirmed GCS deletion is idempotent
+  it('17. Confirmed GCS deletion is idempotent', async () => {
+    const requestId = 'req_delete_confirmed_' + Date.now();
+    const confirmed = await stageAndConfirmTestFile(
+      requestId,
+      'delete-test.txt',
+      'delete-test-content'
+    );
+
+    const beforeDelete = await storageProvider.getConfirmedFile(
+      confirmed.fileId,
+      requestId
+    );
+    assert.ok(beforeDelete);
+    assert.equal(beforeDelete.status, 'confirmed');
+
+    const firstDelete = await storageProvider.deleteConfirmedFile(
+      confirmed.fileId,
+      requestId
+    );
+    assert.equal(firstDelete.success, true);
+    assert.equal(firstDelete.alreadyDeleted, false);
+
+    const afterDelete = await storageProvider.getConfirmedFile(
+      confirmed.fileId,
+      requestId
+    );
+    assert.equal(afterDelete, null);
+
+    const secondDelete = await storageProvider.deleteConfirmedFile(
+      confirmed.fileId,
+      requestId
+    );
+    assert.equal(secondDelete.success, true);
+    assert.equal(secondDelete.alreadyDeleted, true);
   });
 
   // 17. Two different fileIds with the same filename both transfer successfully
@@ -526,6 +597,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
 
     const result = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Praveen',
       contact: '+919999999999',
       submittedAt: '2026-09-07T12:00:00Z',
@@ -538,8 +610,8 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     assert.equal(result.alreadyPresentFiles, 0);
     assert.equal(result.failedFiles, 0);
 
-    // Both files must exist in mock Drive with name "photo.jpg"
-    const photoFiles = mockDrive._items.filter((i: MockDriveItem) => i.name === 'photo.jpg');
+    // Both files must exist in mock Drive with deterministic Upload-* names
+    const photoFiles = mockDrive._items.filter((i: MockDriveItem) => ['Upload-01.jpg', 'Upload-02.jpg'].includes(i.name));
     assert.equal(photoFiles.length, 2);
 
     // Verify distinct fileIds in appProperties
@@ -551,6 +623,63 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     assert.equal(f2Drive.content, 'photo-2-bytes');
   });
 
+  // 18. Storage lifecycle: temporary is removed only after confirmed promotion
+  it('18. Storage lifecycle: temporary is removed only after confirmed promotion', async () => {
+    const requestId = 'req_lifecycle_' + Date.now();
+
+    const staged = await storageProvider.saveTemporaryFile({
+      requestId,
+      fileId: 'up_' + crypto.randomBytes(12).toString('hex'),
+      ownerToken: crypto.randomBytes(24).toString('hex'),
+      originalName: 'lifecycle.txt',
+      sanitizedName: 'lifecycle.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('lifecycle-test-content', 'utf-8'),
+      size: Buffer.byteLength('lifecycle-test-content', 'utf-8'),
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 3600000
+    });
+
+    const confirmed = await storageProvider.promoteToConfirmed(
+      staged.fileId,
+      requestId
+    );
+
+    const temporaryBeforeCleanup = await storageProvider.getTemporaryFile(
+      staged.fileId,
+      requestId
+    );
+    const confirmedBeforeCleanup = await storageProvider.getConfirmedFile(
+      staged.fileId,
+      requestId
+    );
+
+    assert.ok(temporaryBeforeCleanup);
+    assert.equal(temporaryBeforeCleanup.status, 'temporary');
+    assert.ok(confirmedBeforeCleanup);
+    assert.equal(confirmedBeforeCleanup.status, 'confirmed');
+
+    const cleanup = await storageProvider.deleteTemporaryFile(
+      staged.fileId,
+      requestId
+    );
+
+    assert.equal(cleanup.success, true);
+
+    const temporaryAfterCleanup = await storageProvider.getTemporaryFile(
+      staged.fileId,
+      requestId
+    );
+    const confirmedAfterCleanup = await storageProvider.getConfirmedFile(
+      confirmed.fileId,
+      requestId
+    );
+
+    assert.equal(temporaryAfterCleanup, null);
+    assert.ok(confirmedAfterCleanup);
+    assert.equal(confirmedAfterCleanup.status, 'confirmed');
+  });
+
   // 18. Retrying the same requestId + fileId does not create a duplicate
   it('18. Retrying the same requestId + fileId does not create a duplicate', async () => {
     const mockDrive = createMockDriveClient();
@@ -560,6 +689,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     // Run 1: initial transfer
     const res1 = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Praveen',
       contact: '+919999999999',
       files: [{ fileId: f1.fileId }],
@@ -571,6 +701,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     // Run 2: retry same requestId + fileId
     const res2 = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Praveen',
       contact: '+919999999999',
       files: [{ fileId: f1.fileId }],
@@ -594,6 +725,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     // Upload f1 first
     const res1 = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Praveen',
       contact: '+919999999999',
       files: [{ fileId: f1.fileId }],
@@ -605,6 +737,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     // Upload f2 later (same filename "drawing.dwg", different fileId)
     const res2 = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Praveen',
       contact: '+919999999999',
       files: [{ fileId: f2.fileId }],
@@ -613,7 +746,10 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     assert.equal(res2.transferredFiles, 1);
     assert.equal(res2.alreadyPresentFiles, 0);
 
-    const drawingFiles = mockDrive._items.filter((i: MockDriveItem) => i.name === 'drawing.dwg');
+    const drawingFiles = mockDrive._items.filter(
+      (i: MockDriveItem) =>
+        ['Upload-01.dwg', 'Upload-02.dwg'].includes(i.name)
+    );
     assert.equal(drawingFiles.length, 2);
   });
 
@@ -625,6 +761,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
 
     await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Praveen',
       contact: '+919999999999',
       files: [{ fileId: f1.fileId }],
@@ -653,6 +790,7 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
 
     const result = await transferConfirmedProjectToDrive({
       requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
       customer: 'Praveen',
       contact: '+919999999999',
       files: [{ fileId: f1.fileId }],
@@ -663,8 +801,15 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     assert.ok(folderId);
 
     // Exact match
-    const foundId = await findFileByAppProperties(mockDrive, requestId, f1.fileId, folderId);
-    assert.ok(foundId);
+    const foundFile = await findFileByAppProperties(
+      mockDrive,
+      requestId,
+      f1.fileId,
+      folderId
+    );
+    assert.ok(foundFile);
+    assert.ok(foundFile.id);
+    assert.equal(foundFile.name, 'Upload-01.png');
 
     // Different fileId
     const notFoundFile = await findFileByAppProperties(mockDrive, requestId, 'up_different_file_id', folderId);

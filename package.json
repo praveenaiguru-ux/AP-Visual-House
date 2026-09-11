@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "STORAGE_USE_EMULATOR=true STORAGE_ENV=test tsx --test server/driveTransfer.test.ts"
+    "test": "STORAGE_USE_EMULATOR=true STORAGE_ENV=test tsx --test server/driveTransfer.test.ts server/server.integration.test.ts"
   },
   "dependencies": {
     "@google-cloud/secret-manager": "^7.0.0",
