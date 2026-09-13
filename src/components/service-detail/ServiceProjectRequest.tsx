@@ -757,7 +757,7 @@ export default function ServiceProjectRequest({
                     >
                       {COUNTRY_CODES.map((country) => (
                         <option key={country.code} value={country.code}>
-                          {country.flag} {country.code} — {country.country}
+                          {country.code}
                         </option>
                       ))}
                     </select>
