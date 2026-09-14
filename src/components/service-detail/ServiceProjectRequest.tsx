@@ -53,12 +53,12 @@ const COUNTRY_CODES = [
 ];
 
 function normalizePhoneNumber(countryCode: string, localNumber: string): string {
-  const digits = localNumber.replace(/\\D/g, '');
+  const digits = localNumber.replace(/\D/g, '');
   return `${countryCode}${digits}`;
 }
 
 function isValidE164Phone(phone: string): boolean {
-  return /^\\+[1-9]\\d{7,14}$/.test(phone);
+  return /^\+[1-9]\d{7,14}$/.test(phone);
 }
 
 export default function ServiceProjectRequest({
