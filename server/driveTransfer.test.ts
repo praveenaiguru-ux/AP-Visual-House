@@ -819,4 +819,52 @@ describe('PHASE 5.3B — CONFIRMED GCS → OWNER GOOGLE DRIVE TRANSFER TEST SUIT
     const notFoundReq = await findFileByAppProperties(mockDrive, 'req_other_request', f1.fileId, folderId);
     assert.equal(notFoundReq, null);
   });
+
+  // 22. Existing Drive file listing failure returns a controlled result
+  it('22. Existing Drive file listing failure returns a controlled result', async () => {
+    const mockDrive = createMockDriveClient();
+    const requestId = 'req_list_failure_' + Date.now();
+    const confirmed = await stageAndConfirmTestFile(requestId, 'listing-test.png', 'listing-test-data');
+
+    const originalList = mockDrive.files.list;
+    let listingCalls = 0;
+
+    mockDrive.files.list = async (args: any) => {
+      listingCalls++;
+
+      // Allow folder hierarchy lookups to succeed.
+      // Fail specifically when transfer checks existing Upload-NN files.
+      if (args.q?.includes("mimeType != 'application/vnd.google-apps.folder'")) {
+        throw new Error('Simulated Google Drive file listing failure');
+      }
+
+      return originalList(args);
+    };
+
+    const result = await transferConfirmedProjectToDrive({
+      requestId,
+      projectReference: TEST_PROJECT_REFERENCE,
+      customer: 'Praveen',
+      contact: '+919999999999',
+      files: [{ fileId: confirmed.fileId }],
+      driveClientOverride: mockDrive
+    });
+
+    assert.ok(listingCalls > 0);
+    assert.equal(result.success, false);
+    assert.ok(result.projectFolderId);
+    assert.equal(result.transferredFiles, 0);
+    assert.equal(result.alreadyPresentFiles, 0);
+    assert.equal(result.failedFiles, 1);
+    assert.equal(result.metadataUpdated, false);
+    assert.equal(result.transferredRecords.length, 0);
+    assert.match(result.error || '', /existing Google Drive files/i);
+
+    const fileInStorage = await storageProvider.getConfirmedFile(
+      confirmed.fileId,
+      requestId
+    );
+    assert.ok(fileInStorage);
+    assert.equal(fileInStorage.status, 'confirmed');
+  });
 });

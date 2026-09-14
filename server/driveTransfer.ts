@@ -341,10 +341,29 @@ export async function transferConfirmedProjectToDrive(
 
   // Track Upload-NN filenames already present in this project folder.
   // Update this set as files are created during the current transfer.
-  const existingUploadFiles = await listProjectUploadFiles(
-    drive,
-    projectFolderId
-  );
+  let existingUploadFiles: string[];
+  try {
+    existingUploadFiles = await listProjectUploadFiles(
+      drive,
+      projectFolderId
+    );
+  } catch (listErr: any) {
+    console.error(
+      `[DRIVE] Transfer failed for request ${requestId} while listing existing project files:`,
+      listErr?.message || listErr
+    );
+
+    return {
+      success: false,
+      projectFolderId,
+      transferredFiles: 0,
+      alreadyPresentFiles: 0,
+      failedFiles: files.length,
+      metadataUpdated: false,
+      transferredRecords: [],
+      error: `Failed to inspect existing Google Drive files: ${listErr?.message || 'Drive listing error'}`
+    };
+  }
 
   const usedUploadNumbers = new Set(
     existingUploadFiles
