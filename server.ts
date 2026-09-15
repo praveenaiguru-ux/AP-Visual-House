@@ -23,6 +23,8 @@ import {
   transferConfirmedProjectToDrive,
   DriveTransferResult
 } from './server/driveTransfer';
+import { generateProjectReference } from './server/projectReference';
+import { sendOwnerProjectNotification } from './server/ownerEmail';
 
 /**
  * AP VISUAL HOUSE — CLOUD RUN BACKEND SERVICE
@@ -43,6 +45,10 @@ const HOST = '0.0.0.0';
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB per file
 const MAX_TOTAL_SIZE = 25 * 1024 * 1024; // 25 MB total per request
 const MAX_FILES = 5;
+
+// Customer contact numbers are submitted by the frontend in E.164 format.
+// Backend validation is authoritative and does not claim WhatsApp ownership/verification.
+const E164_PHONE_REGEX = /^\+[1-9]\d{7,14}$/;
 
 // Configurable Retention Window (Default: 24 hours)
 const DEFAULT_RETENTION_HOURS = 24;
@@ -140,7 +146,7 @@ const cleanupInterval = setInterval(async () => {
 }, 5 * 60 * 1000);
 cleanupInterval.unref();
 
-async function startServer() {
+export async function createApp() {
   const app = express();
 
   // Security Headers Middleware
@@ -362,7 +368,7 @@ async function startServer() {
         res.json({
           success: true,
           message: 'Google Drive owner authorization completed successfully.',
-          scope: GOOGLE_DRIVE_SCOPE,
+          scope: 'drive.file + gmail.send',
           hasRefreshToken: result.hasRefreshToken,
           savedToSecretManager: result.savedToSecretManager
         });
@@ -605,6 +611,16 @@ async function startServer() {
         res.status(400).json({ error: 'WhatsApp contact number is required.' });
         return;
       }
+
+      const normalizedWhatsapp = whatsapp.trim();
+
+      if (!E164_PHONE_REGEX.test(normalizedWhatsapp)) {
+        res.status(400).json({
+          error: 'Please enter a valid WhatsApp number with the correct country code.'
+        });
+        return;
+      }
+
       // Content policy validation
       const policyConfirmed = Boolean(hasConfirmedPolicy || contentPolicyAccepted);
       if (!policyConfirmed) {
@@ -698,7 +714,8 @@ async function startServer() {
         return;
       }
 
-      // PROMOTION: Files are promoted from temporary/ to confirmed/ ONLY AFTER ALL VALIDATIONS PASS
+      // PROMOTION: Files are promoted from temporary/ to confirmed/ ONLY AFTER ALL VALIDATIONS PASS.
+      // Confirmed storage is verified before any temporary copy is removed.
       const confirmedFiles: { fileId: string; storageKey: string; sanitizedName: string }[] = [];
       for (const record of validRecords) {
         const confirmed = await storageProvider.promoteToConfirmed(record.fileId, record.requestId);
@@ -709,7 +726,35 @@ async function startServer() {
         });
       }
 
-      const projectId = 'APV-' + Date.now().toString(36).toUpperCase();
+      // LIFECYCLE TRANSITION: confirmed/ is now authoritative for this stage.
+      // Remove temporary copies only after ALL files have been successfully promoted.
+      // If cleanup fails, keep confirmed storage and continue; confirmed data is the
+      // fail-safe copy for Drive transfer/retry.
+      for (const record of validRecords) {
+        try {
+          const cleanupResult = await storageProvider.deleteTemporaryFile(
+            record.fileId,
+            record.requestId
+          );
+
+          if (!cleanupResult.success) {
+            console.warn(
+              `[STORAGE] Temporary cleanup did not succeed for ${record.fileId}; confirmed copy retained.`
+            );
+          } else if (!cleanupResult.alreadyDeleted) {
+            console.log(
+              `[STORAGE] Temporary copy deleted for ${record.fileId} after confirmed promotion.`
+            );
+          }
+        } catch (cleanupErr: any) {
+          console.error(
+            `[STORAGE] Failed to delete temporary copy for ${record.fileId}; confirmed copy retained:`,
+            cleanupErr?.message || cleanupErr
+          );
+        }
+      }
+
+      const projectId = generateProjectReference(new Date());
       const submittedAt = new Date().toISOString();
 
       let finalRequestId = incomingRequestId;
@@ -717,7 +762,7 @@ async function startServer() {
         finalRequestId = validRecords[0]?.requestId || ('req_' + crypto.randomBytes(8).toString('hex'));
       }
 
-      console.log(`[PROJECT CONFIRMED] ${projectId} for ${serviceName} by ${name} (${whatsapp}) with ${confirmedFiles.length} file(s) in confirmed storage.`);
+      console.log(`[PROJECT CONFIRMED] ${projectId} for ${serviceName} by ${name} (${normalizedWhatsapp}) with ${confirmedFiles.length} file(s) in confirmed storage.`);
 
       // PHASE 5.3B: CONFIRMED GCS -> OWNER GOOGLE DRIVE TRANSFER
       // GCS confirmation remains authoritative: if Drive transfer is pending or fails,
@@ -726,9 +771,10 @@ async function startServer() {
       try {
         driveTransferResult = await transferConfirmedProjectToDrive({
           requestId: finalRequestId,
+          projectReference: projectId,
           service: serviceName,
           customer: name,
-          contact: whatsapp,
+          contact: normalizedWhatsapp,
           email: email || undefined,
           requirement: requirements || undefined,
           startingQuote: startingPrice ? `${currency || ''}${startingPrice}` : undefined,
@@ -743,18 +789,102 @@ async function startServer() {
           alreadyPresentFiles: 0,
           failedFiles: confirmedFiles.length,
           metadataUpdated: false,
+          transferredRecords: [],
           error: driveErr?.message || 'Drive transfer temporarily unavailable'
         };
       }
 
       const isDriveSuccess = driveTransferResult?.success === true;
 
+      // FINAL STORAGE TRANSITION:
+      // Drive is authoritative only after the transfer function has verified
+      // every file and project-metadata.json. Once Drive succeeds, remove the
+      // confirmed GCS copies. Never delete confirmed storage on Drive failure.
+      if (isDriveSuccess) {
+        for (const record of validRecords) {
+          try {
+            const cleanupResult = await storageProvider.deleteConfirmedFile(
+              record.fileId,
+              record.requestId
+            );
+
+            if (!cleanupResult.success) {
+              console.warn(
+                `[STORAGE] Confirmed cleanup did not succeed for ${record.fileId}; Drive copy retained as final copy.`
+              );
+            } else if (!cleanupResult.alreadyDeleted) {
+              console.log(
+                `[STORAGE] Confirmed copy deleted for ${record.fileId} after verified Drive transfer.`
+              );
+            }
+          } catch (cleanupErr: any) {
+            console.error(
+              `[STORAGE] Failed to delete confirmed copy for ${record.fileId} after verified Drive transfer; Drive copy retained:`,
+              cleanupErr?.message || cleanupErr
+            );
+          }
+        }
+      }
+
+      // PHASE 5.4B: OWNER EMAIL NOTIFICATION
+      // GCS confirmation is authoritative. Notify the owner for both Drive
+      // success and Drive pending/failure states. Email failure is non-fatal.
+      try {
+        await sendOwnerProjectNotification({
+          projectReference: projectId,
+          service: serviceName,
+          customerName: name,
+          contact: normalizedWhatsapp,
+          email: email || undefined,
+          requirement: requirements || undefined,
+          startingQuote: startingPrice
+            ? `${currency || ''}${startingPrice}`
+            : undefined,
+          submittedAt,
+          driveProjectFolderId: isDriveSuccess
+            ? driveTransferResult?.projectFolderId
+            : undefined,
+          driveTransferStatus: isDriveSuccess ? 'SUCCESS' : 'PENDING',
+          driveTransferReason: isDriveSuccess
+            ? undefined
+            : (
+                driveTransferResult?.error ||
+                'Drive transfer temporarily unavailable.'
+              ),
+          files: isDriveSuccess
+            ? (driveTransferResult?.transferredRecords || [])
+            : confirmedFiles.map(cf => {
+                const sourceRecord = validRecords.find(
+                  record => record.fileId === cf.fileId
+                );
+
+                return {
+                  driveFileName: cf.sanitizedName,
+                  originalName: sourceRecord?.originalName || cf.sanitizedName,
+                  sizeMB: Number(
+                    ((sourceRecord?.size || 0) / (1024 * 1024)).toFixed(2)
+                  ),
+                  mimeType: sourceRecord?.mimeType || 'application/octet-stream'
+                };
+              })
+        });
+
+        console.log(
+          `[OWNER EMAIL] Notification sent for project ${projectId}.`
+        );
+      } catch (emailErr: any) {
+        console.error(
+          `[OWNER EMAIL] Notification failed for project ${projectId}:`,
+          emailErr?.message || emailErr
+        );
+      }
+
       res.status(200).json({
         success: true,
         projectId,
         serviceName,
         name,
-        whatsapp,
+        whatsapp: normalizedWhatsapp,
         email: email || undefined,
         requirements: requirements || undefined,
         startingPrice,
@@ -776,7 +906,7 @@ async function startServer() {
       const statusCode = err instanceof StorageServiceError ? err.statusCode : 500;
       const userMessage = err instanceof StorageServiceError
         ? err.userSafeMessage
-        : 'Server error while submitting project request. Temporary files remain preserved for retry.';
+        : "We couldn't complete your project submission. Please re-upload your files and try again.";
       res.status(statusCode).json({
         success: false,
         error: userMessage
@@ -815,10 +945,5 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, HOST, () => {
-    console.log(`AP Visual House server running on http://${HOST}:${PORT}`);
-    console.log(`Storage Mode: ${storageProvider.isUsingGCS() ? 'Google Cloud Storage' : 'Durable Emulation'} (Retention: ${RETENTION_HOURS}h)`);
-  });
+  return app;
 }
-
-startServer();

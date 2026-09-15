@@ -370,6 +370,69 @@ class StorageProvider {
     }
   }
 
+  // --- DELETE CONFIRMED FILE (IDEMPOTENT) ---
+  public async deleteConfirmedFile(fileId: string, requestId: string): Promise<{ success: boolean; alreadyDeleted: boolean }> {
+    if (!SAFE_FILE_ID_REGEX.test(fileId) || !SAFE_REQUEST_ID_REGEX.test(requestId)) {
+      return { success: false, alreadyDeleted: false };
+    }
+
+    const confirmedKey = `confirmed/${requestId}/${fileId}`;
+
+    // 1. Explicit Development/Test Emulator
+    if (this.isEmulatorMode) {
+      const confDir = path.join(this.emulatorDir, 'confirmed', requestId);
+      const dataPath = path.join(confDir, `${fileId}.data`);
+      const metaPath = path.join(confDir, `${fileId}.meta.json`);
+
+      if (!fs.existsSync(dataPath) && !fs.existsSync(metaPath)) {
+        return { success: true, alreadyDeleted: true };
+      }
+
+      if (fs.existsSync(dataPath)) {
+        try { fs.unlinkSync(dataPath); } catch {}
+      }
+
+      if (fs.existsSync(metaPath)) {
+        try { fs.unlinkSync(metaPath); } catch {}
+      }
+
+      try {
+        if (fs.existsSync(confDir) && fs.readdirSync(confDir).length === 0) {
+          fs.rmdirSync(confDir);
+        }
+      } catch {}
+
+      return { success: true, alreadyDeleted: false };
+    }
+
+    // 2. Production / Real Google Cloud Storage (Fail-Closed)
+    try {
+      const bucket = this.getBucket();
+      const file = bucket.file(confirmedKey);
+
+      const [exists] = await file.exists().catch((e) => {
+        if (e?.code === 403 || e?.code === 401) {
+          throw e;
+        }
+        return [false];
+      });
+
+      if (!exists) {
+        return { success: true, alreadyDeleted: true };
+      }
+
+      await file.delete({ ignoreNotFound: true });
+      return { success: true, alreadyDeleted: false };
+    } catch (err: any) {
+      console.error(`[STORAGE FAIL-CLOSED] Failed to delete confirmed object from Google Cloud Storage (${fileId}):`, err);
+      throw new StorageServiceError(
+        `Failed to delete confirmed object from cloud storage: ${err?.message || 'Storage delete failed'}`,
+        503,
+        'Unable to remove the confirmed file from secure cloud storage. Please try again later.'
+      );
+    }
+  }
+
   // --- PROMOTE TEMPORARY FILE TO CONFIRMED ---
   public async promoteToConfirmed(fileId: string, requestId: string): Promise<StagedFileRecord> {
     const tempKey = `temporary/${requestId}/${fileId}`;
@@ -401,9 +464,8 @@ class StorageProvider {
 
       fs.writeFileSync(confMeta, JSON.stringify(record, null, 2), 'utf-8');
 
-      try { fs.unlinkSync(tempData); } catch {}
-      try { fs.unlinkSync(tempMeta); } catch {}
-
+      // Keep the temporary copy until the downstream Google Drive
+      // transfer has been successfully verified.
       return record;
     }
 
@@ -434,9 +496,8 @@ class StorageProvider {
         }
       });
 
-      // Purge temporary object
-      await sourceFile.delete({ ignoreNotFound: true });
-
+      // Keep the temporary object until the downstream Google Drive
+      // transfer has been successfully verified.
       const [finalMeta] = await destFile.getMetadata();
       return this.parseGcsMetadata(confirmedKey, finalMeta);
     } catch (err: any) {

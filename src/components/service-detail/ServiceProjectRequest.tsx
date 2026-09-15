@@ -29,6 +29,38 @@ const FRONTEND_MAX_FILES = UPLOAD_LIMITS.MAX_FILES; // 5
 const FRONTEND_MAX_FILE_SIZE = UPLOAD_LIMITS.MAX_FILE_SIZE_BYTES; // 10MB
 const FRONTEND_MAX_TOTAL_SIZE = UPLOAD_LIMITS.MAX_TOTAL_SIZE_BYTES; // 25MB
 
+const COUNTRY_CODES = [
+  { code: '+91', country: 'India', flag: '🇮🇳' },
+  { code: '+1', country: 'United States / Canada', flag: '🇺🇸' },
+  { code: '+44', country: 'United Kingdom', flag: '🇬🇧' },
+  { code: '+61', country: 'Australia', flag: '🇦🇺' },
+  { code: '+65', country: 'Singapore', flag: '🇸🇬' },
+  { code: '+971', country: 'United Arab Emirates', flag: '🇦🇪' },
+  { code: '+974', country: 'Qatar', flag: '🇶🇦' },
+  { code: '+966', country: 'Saudi Arabia', flag: '🇸🇦' },
+  { code: '+49', country: 'Germany', flag: '🇩🇪' },
+  { code: '+33', country: 'France', flag: '🇫🇷' },
+  { code: '+39', country: 'Italy', flag: '🇮🇹' },
+  { code: '+34', country: 'Spain', flag: '🇪🇸' },
+  { code: '+81', country: 'Japan', flag: '🇯🇵' },
+  { code: '+82', country: 'South Korea', flag: '🇰🇷' },
+  { code: '+86', country: 'China', flag: '🇨🇳' },
+  { code: '+852', country: 'Hong Kong', flag: '🇭🇰' },
+  { code: '+60', country: 'Malaysia', flag: '🇲🇾' },
+  { code: '+64', country: 'New Zealand', flag: '🇳🇿' },
+  { code: '+27', country: 'South Africa', flag: '🇿🇦' },
+  { code: '+55', country: 'Brazil', flag: '🇧🇷' }
+];
+
+function normalizePhoneNumber(countryCode: string, localNumber: string): string {
+  const digits = localNumber.replace(/\D/g, '');
+  return `${countryCode}${digits}`;
+}
+
+function isValidE164Phone(phone: string): boolean {
+  return /^\+[1-9]\d{7,14}$/.test(phone);
+}
+
 export default function ServiceProjectRequest({
   serviceName,
   startingPrice,
@@ -36,6 +68,7 @@ export default function ServiceProjectRequest({
   uploadConfig
 }: ServiceProjectRequestProps) {
   const [name, setName] = useState('');
+  const [countryCode, setCountryCode] = useState('+91');
   const [whatsapp, setWhatsapp] = useState('');
   const [email, setEmail] = useState('');
   const [requirements, setRequirements] = useState('');
@@ -439,6 +472,14 @@ export default function ServiceProjectRequest({
       setError('Please provide your WhatsApp number for communication.');
       return;
     }
+
+    const normalizedWhatsapp = normalizePhoneNumber(countryCode, whatsapp);
+
+    if (!isValidE164Phone(normalizedWhatsapp)) {
+      setError('Please enter a valid WhatsApp number with the correct country code.');
+      return;
+    }
+
     if (!hasConfirmedPolicy) {
       setError("Please confirm that your uploaded files comply with AP Visual House's Content Policy.");
       return;
@@ -526,7 +567,7 @@ export default function ServiceProjectRequest({
         body: JSON.stringify({
           requestId,
           name,
-          whatsapp,
+          whatsapp: normalizedWhatsapp,
           email,
           requirements,
           serviceName,
@@ -545,6 +586,7 @@ export default function ServiceProjectRequest({
       }
 
       const data = await response.json();
+      setWhatsapp(normalizedWhatsapp);
       setSubmittedProjectData({
         projectId: data.projectId,
         filesAttached: data.filesAttached
@@ -645,6 +687,8 @@ export default function ServiceProjectRequest({
                   type="button"
                   onClick={() => {
                     setIsSubmitted(false);
+                    setCountryCode('+91');
+                    setWhatsapp('');
                     setRequirements('');
                     setManagedFiles([]);
                     setHasConfirmedPolicy(false);
@@ -699,19 +743,45 @@ export default function ServiceProjectRequest({
                 </div>
 
                 <div>
-                  <label htmlFor="client-whatsapp" className="block text-xs font-bold uppercase tracking-wider text-foreground mb-2">
+                  <label htmlFor="client-whatsapp-number" className="block text-xs font-bold uppercase tracking-wider text-foreground mb-2">
                     WhatsApp Number <span className="text-red-500">*</span>
                   </label>
-                  <input
-                    id="client-whatsapp"
-                    type="tel"
-                    required
-                    disabled={isUploading || isSubmitting}
-                    value={whatsapp}
-                    onChange={(e) => setWhatsapp(e.target.value)}
-                    placeholder="e.g. +91 98765 43210"
-                    className="w-full px-4 py-3 bg-white border border-foreground/20 rounded-lg text-foreground placeholder:text-foreground/40 text-sm focus:outline-none focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] transition-all disabled:opacity-60"
-                  />
+                  <div className="flex gap-2">
+                    <select
+                      id="client-country-code"
+                      aria-label="Country calling code"
+                      disabled={isUploading || isSubmitting}
+                      value={countryCode}
+                      onChange={(e) => setCountryCode(e.target.value)}
+                      className="w-[42%] sm:w-[38%] px-3 py-3 bg-white border border-foreground/20 rounded-lg text-foreground text-sm focus:outline-none focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] transition-all disabled:opacity-60"
+                    >
+                      {COUNTRY_CODES.map((country) => (
+                        <option key={country.code} value={country.code}>
+                          {country.code}
+                        </option>
+                      ))}
+                    </select>
+
+                    <input
+                      id="client-whatsapp-number"
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel-national"
+                      required
+                      disabled={isUploading || isSubmitting}
+                      value={whatsapp}
+                      onChange={(e) => {
+                        const digitsOnly = e.target.value.replace(/\\D/g, '');
+                        setWhatsapp(digitsOnly);
+                      }}
+                      placeholder="98765 43210"
+                      aria-describedby="client-whatsapp-help"
+                      className="min-w-0 flex-1 px-4 py-3 bg-white border border-foreground/20 rounded-lg text-foreground placeholder:text-foreground/40 text-sm focus:outline-none focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] transition-all disabled:opacity-60"
+                    />
+                  </div>
+                  <p id="client-whatsapp-help" className="mt-2 text-[11px] text-foreground/50">
+                    Select your country code and enter your WhatsApp number. No WhatsApp verification is performed.
+                  </p>
                 </div>
               </div>
 

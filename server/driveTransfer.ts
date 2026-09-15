@@ -17,16 +17,19 @@ import { getAuthenticatedDriveClient } from './driveAuth';
  *     AP Visual House/
  *       Confirmed Projects/
  *         YYYY/
- *           Project-{requestId}/
- *             <original sanitized filename>
- *             project-metadata.json
+ *           Month/
+ *             APV-YYMM-XXXX/
+ *               Upload-01.<ext>
+ *               Upload-02.<ext>
+ *               project-metadata.json
  * - Zero Memory Overhead: Streams directly from GCS confirmed object to Google Drive.
  * - Idempotency & Retry Safety:
- *     - Reuses existing Project-{requestId} folder if already present.
- *     - Identifies existing files by sanitized name; skips duplicate uploads.
+ *     - Reuses the customer-facing APV project folder if the transfer is retried.
+ *     - Identifies uploaded files by requestId + fileId appProperties.
+ *     - Uses deterministic Upload-01, Upload-02, etc. names within the project.
  *     - Updates project-metadata.json in place rather than creating duplicates.
  * - Strict Zero-Leak Security:
- *     - Uses only 'https://www.googleapis.com/auth/drive.file' scope via existing owner OAuth client.
+ *     - Uses the existing owner OAuth client with Drive file access; Gmail send access is used separately for owner notifications.
  *     - Never exposes Drive tokens or secrets in metadata, logs, or API responses.
  *     - Never makes folders/files public or generates public URLs.
  *     - Validates requestId and fileId formats.
@@ -41,6 +44,7 @@ export interface TransferFileRef {
 
 export interface TransferConfirmedProjectParams {
   requestId: string;
+  projectReference: string;
   service?: string;
   customer: string;
   contact: string;
@@ -59,11 +63,14 @@ export interface DriveTransferResult {
   alreadyPresentFiles: number;
   failedFiles: number;
   metadataUpdated: boolean;
+  transferredRecords: StoredProjectMetadata['files'];
   error?: string;
 }
 
 export interface StoredProjectMetadata {
-  reference: string;
+  // Business information
+  projectReference: string;
+  requestId: string;
   service: string;
   customerName: string;
   contact: string;
@@ -73,14 +80,22 @@ export interface StoredProjectMetadata {
   submittedAt: string;
   contentPolicyAccepted: boolean;
   driveTransferStatus: 'completed' | 'pending' | 'failed';
+
+  // Uploaded files
   files: Array<{
     fileId: string;
+    driveFileName: string;
     originalName: string;
-    sanitizedName: string;
-    size: number;
+    sizeMB: number;
     mimeType: string;
   }>;
-  transferredAt: string;
+
+  // Technical traceability
+  technical: {
+    transferredAt: string;
+    storagePathPrefix: string;
+    driveProjectFolderId: string;
+  };
 }
 
 /**
@@ -129,7 +144,7 @@ export async function findFileInFolder(
   drive: drive_v3.Drive,
   fileName: string,
   folderId: string
-): Promise<string | null> {
+): Promise<{ id: string; name: string } | null> {
   const escapedName = fileName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   const q = `name = '${escapedName}' and trashed = false and '${folderId}' in parents and mimeType != 'application/vnd.google-apps.folder'`;
 
@@ -140,8 +155,16 @@ export async function findFileInFolder(
     pageSize: 10
   });
 
-  if (res.data.files && res.data.files.length > 0 && res.data.files[0].id) {
-    return res.data.files[0].id;
+  if (
+    res.data.files &&
+    res.data.files.length > 0 &&
+    res.data.files[0].id &&
+    res.data.files[0].name
+  ) {
+    return {
+      id: res.data.files[0].id,
+      name: res.data.files[0].name
+    };
   }
 
   return null;
@@ -156,7 +179,7 @@ export async function findFileByAppProperties(
   requestId: string,
   fileId: string,
   folderId: string
-): Promise<string | null> {
+): Promise<{ id: string; name: string } | null> {
   const escapedRequestId = requestId.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   const escapedFileId = fileId.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   const q = `appProperties has { key='apvhRequestId' and value='${escapedRequestId}' } and appProperties has { key='apvhFileId' and value='${escapedFileId}' } and trashed = false and '${folderId}' in parents and mimeType != 'application/vnd.google-apps.folder'`;
@@ -168,11 +191,43 @@ export async function findFileByAppProperties(
     pageSize: 10
   });
 
-  if (res.data.files && res.data.files.length > 0 && res.data.files[0].id) {
-    return res.data.files[0].id;
+  if (
+    res.data.files &&
+    res.data.files.length > 0 &&
+    res.data.files[0].id &&
+    res.data.files[0].name
+  ) {
+    return {
+      id: res.data.files[0].id,
+      name: res.data.files[0].name
+    };
   }
 
   return null;
+}
+
+/**
+ * Lists deterministic Upload-NN files already present in a project folder.
+ * Used to allocate the next available Drive filename without collisions.
+ */
+export async function listProjectUploadFiles(
+  drive: drive_v3.Drive,
+  folderId: string
+): Promise<string[]> {
+  const q = `trashed = false and '${folderId}' in parents and mimeType != 'application/vnd.google-apps.folder'`;
+
+  const res = await drive.files.list({
+    q,
+    spaces: 'drive',
+    fields: 'files(id, name)',
+    pageSize: 100
+  });
+
+  return (res.data.files || [])
+    .map((file) => file.name)
+    .filter((name): name is string =>
+      typeof name === 'string' && /^Upload-\d{2}(?:\.[^.]+)?$/i.test(name)
+    );
 }
 
 /**
@@ -184,6 +239,7 @@ export async function transferConfirmedProjectToDrive(
 ): Promise<DriveTransferResult> {
   const {
     requestId,
+    projectReference,
     service = 'Custom Visual Commission',
     customer,
     contact,
@@ -195,12 +251,17 @@ export async function transferConfirmedProjectToDrive(
     driveClientOverride
   } = params;
 
-  // 1. Validate requestId format to prevent path injection
+  // 1. Validate internal requestId format
   if (!requestId || !SAFE_REQUEST_ID_REGEX.test(requestId)) {
     throw new Error(`Invalid requestId format for Drive transfer: ${requestId}`);
   }
 
-  // 2. Validate all fileId formats before any Drive operations
+  // 2. Validate customer-facing project reference format
+  if (!projectReference || !/^APV-\d{4}-[A-HJ-NP-Z2-9]{4}$/.test(projectReference)) {
+    throw new Error(`Invalid project reference format for Drive transfer: ${projectReference}`);
+  }
+
+  // 3. Validate all fileId formats before any Drive operations
   for (const f of files) {
     if (!f.fileId || !SAFE_FILE_ID_REGEX.test(f.fileId)) {
       throw new Error(`Invalid fileId format for Drive transfer: ${f.fileId}`);
@@ -220,26 +281,44 @@ export async function transferConfirmedProjectToDrive(
       alreadyPresentFiles: 0,
       failedFiles: files.length,
       metadataUpdated: false,
+      transferredRecords: [],
       error: authErr?.message || 'Google Drive client not authenticated'
     };
   }
 
   let projectFolderId: string;
   try {
-    // 3. Find or create root folder: "AP Visual House" inside Drive root
+    // 4. Find or create root folder: "AP Visual House" inside Drive root
     const rootFolderId = await findOrCreateFolder(drive, 'AP Visual House', 'root');
 
-    // 4. Find or create Level 2 folder: "Confirmed Projects" inside "AP Visual House"
+    // 5. Find or create Level 2 folder: "Confirmed Projects" inside "AP Visual House"
     const confirmedProjectsFolderId = await findOrCreateFolder(drive, 'Confirmed Projects', rootFolderId);
 
-    // 5. Find or create Level 3 folder: "YYYY" inside "Confirmed Projects"
+    // 6. Derive Year and Month from the submission timestamp in IST.
+    // This keeps Drive organization aligned with the business-facing APV reference.
     const parsedDate = new Date(submittedAt);
-    const yearStr = (!isNaN(parsedDate.getTime()) ? parsedDate.getFullYear() : new Date().getFullYear()).toString();
+    const validSubmittedDate = !isNaN(parsedDate.getTime()) ? parsedDate : new Date();
+
+    const istParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'long'
+    }).formatToParts(validSubmittedDate);
+
+    const yearStr = istParts.find(part => part.type === 'year')?.value
+      || validSubmittedDate.getUTCFullYear().toString();
+
+    const monthStr = istParts.find(part => part.type === 'month')?.value
+      || 'January';
+
     const yearFolderId = await findOrCreateFolder(drive, yearStr, confirmedProjectsFolderId);
 
-    // 6. Find or create Level 4 folder: "Project-{requestId}" inside "YYYY"
-    const projectFolderName = `Project-${requestId}`;
-    projectFolderId = await findOrCreateFolder(drive, projectFolderName, yearFolderId);
+    // 7. Find or create the month folder inside the year folder.
+    const monthFolderId = await findOrCreateFolder(drive, monthStr, yearFolderId);
+
+    // 8. Find or create the customer-facing APV project folder.
+    const projectFolderName = projectReference;
+    projectFolderId = await findOrCreateFolder(drive, projectFolderName, monthFolderId);
 
     console.log(`[DRIVE] Project folder ready for request ${requestId}`);
   } catch (folderErr: any) {
@@ -250,6 +329,7 @@ export async function transferConfirmedProjectToDrive(
       alreadyPresentFiles: 0,
       failedFiles: files.length,
       metadataUpdated: false,
+      transferredRecords: [],
       error: `Failed to prepare Google Drive folder hierarchy: ${folderErr?.message || 'Folder error'}`
     };
   }
@@ -258,6 +338,41 @@ export async function transferConfirmedProjectToDrive(
   let alreadyPresentFiles = 0;
   let failedFiles = 0;
   const transferredRecords: StoredProjectMetadata['files'] = [];
+
+  // Track Upload-NN filenames already present in this project folder.
+  // Update this set as files are created during the current transfer.
+  let existingUploadFiles: string[];
+  try {
+    existingUploadFiles = await listProjectUploadFiles(
+      drive,
+      projectFolderId
+    );
+  } catch (listErr: any) {
+    console.error(
+      `[DRIVE] Transfer failed for request ${requestId} while listing existing project files:`,
+      listErr?.message || listErr
+    );
+
+    return {
+      success: false,
+      projectFolderId,
+      transferredFiles: 0,
+      alreadyPresentFiles: 0,
+      failedFiles: files.length,
+      metadataUpdated: false,
+      transferredRecords: [],
+      error: `Failed to inspect existing Google Drive files: ${listErr?.message || 'Drive listing error'}`
+    };
+  }
+
+  const usedUploadNumbers = new Set(
+    existingUploadFiles
+      .map((name) => {
+        const match = /^Upload-(\d{2})(?:\.[^.]+)?$/i.exec(name);
+        return match ? Number(match[1]) : 0;
+      })
+      .filter((number) => number > 0)
+  );
 
   // 7. Stream each confirmed file from GCS to Google Drive
   for (const fileRef of files) {
@@ -270,15 +385,50 @@ export async function transferConfirmedProjectToDrive(
       }
 
       const { stream, record } = streamObj;
-      const targetFileName = record.sanitizedName || `${record.fileId}`;
 
-      // Check if file already exists in project folder (authoritative idempotency by apvhRequestId + apvhFileId)
-      const existingFileId = await findFileByAppProperties(drive, requestId, fileRef.fileId, projectFolderId);
+      // Use deterministic Drive filenames while preserving the original
+      // customer filename separately in project-metadata.json.
+      const originalFileName = record.originalName || record.sanitizedName || record.fileId;
+      const lastDot = originalFileName.lastIndexOf('.');
+      const extension = lastDot > 0 && lastDot < originalFileName.length - 1
+        ? originalFileName.slice(lastDot).toLowerCase().replace(/[^a-z0-9.]/g, '')
+        : '';
+
+      // Check authoritative idempotency first.
+      // A retry of the same requestId + fileId must not consume a new
+      // Upload-NN filename.
+      const existingFileId = await findFileByAppProperties(
+        drive,
+        requestId,
+        fileRef.fileId,
+        projectFolderId
+      );
+
       if (existingFileId) {
         console.log(`[DRIVE] File already present for request ${requestId}`);
         alreadyPresentFiles++;
+
+        transferredRecords.push({
+          fileId: record.fileId,
+          driveFileName: existingFileId.name,
+          originalName: record.originalName,
+          sizeMB: Number((record.size / (1024 * 1024)).toFixed(2)),
+          mimeType: record.mimeType
+        });
       } else {
-        // Stream directly into Google Drive with authoritative APVH appProperties
+        // Allocate the next unused deterministic Upload-NN filename.
+        let nextUploadNumber = 1;
+
+        while (usedUploadNumbers.has(nextUploadNumber)) {
+          nextUploadNumber++;
+        }
+
+        usedUploadNumbers.add(nextUploadNumber);
+
+        const uploadNumber = String(nextUploadNumber).padStart(2, '0');
+        const targetFileName = `Upload-${uploadNumber}${extension || '.bin'}`;
+
+        // Stream directly into Google Drive with authoritative APVH appProperties.
         await drive.files.create({
           requestBody: {
             name: targetFileName,
@@ -294,17 +444,22 @@ export async function transferConfirmedProjectToDrive(
           },
           fields: 'id, name, mimeType, size, appProperties'
         });
-        console.log(`[DRIVE] File transferred for request ${requestId}: ${targetFileName}`);
+
+        console.log(
+          `[DRIVE] File transferred for request ${requestId}: ${targetFileName}`
+        );
+
         transferredFiles++;
+
+        transferredRecords.push({
+          fileId: record.fileId,
+          driveFileName: targetFileName,
+          originalName: record.originalName,
+          sizeMB: Number((record.size / (1024 * 1024)).toFixed(2)),
+          mimeType: record.mimeType
+        });
       }
 
-      transferredRecords.push({
-        fileId: record.fileId,
-        originalName: record.originalName,
-        sanitizedName: targetFileName,
-        size: record.size,
-        mimeType: record.mimeType
-      });
     } catch (fileErr: any) {
       console.error(`[DRIVE] Failed transferring file ${fileRef.fileId} for request ${requestId}:`, fileErr?.message || fileErr);
       failedFiles++;
@@ -314,19 +469,44 @@ export async function transferConfirmedProjectToDrive(
   // 8. Create or update project-metadata.json in project folder
   let metadataUpdated = false;
   try {
+    const transferredAt = new Date().toISOString();
+
+    const submittedDate = new Date(submittedAt);
+    const formattedSubmittedAt = !isNaN(submittedDate.getTime())
+      ? new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Asia/Kolkata',
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true
+        }).format(submittedDate).replace(',', '') + ' IST'
+      : submittedAt;
+
     const metadataPayload: StoredProjectMetadata = {
-      reference: requestId,
+      // Business information
+      projectReference,
+      requestId,
       service,
       customerName: customer,
       contact,
       email: email || undefined,
       requirement: requirement || undefined,
       startingQuote,
-      submittedAt,
+      submittedAt: formattedSubmittedAt,
       contentPolicyAccepted: true,
       driveTransferStatus: failedFiles === 0 ? 'completed' : 'pending',
+
+      // Uploaded files
       files: transferredRecords,
-      transferredAt: new Date().toISOString()
+
+      // Technical traceability
+      technical: {
+        transferredAt,
+        storagePathPrefix: `confirmed/${requestId}/`,
+        driveProjectFolderId: projectFolderId
+      }
     };
 
     const metadataBuffer = Buffer.from(JSON.stringify(metadataPayload, null, 2), 'utf-8');
@@ -334,7 +514,7 @@ export async function transferConfirmedProjectToDrive(
 
     if (existingMetaId) {
       await drive.files.update({
-        fileId: existingMetaId,
+        fileId: existingMetaId.id,
         media: {
           mimeType: 'application/json',
           body: Readable.from([metadataBuffer])
@@ -374,6 +554,7 @@ export async function transferConfirmedProjectToDrive(
     transferredFiles,
     alreadyPresentFiles,
     failedFiles,
-    metadataUpdated
+    metadataUpdated,
+    transferredRecords
   };
 }

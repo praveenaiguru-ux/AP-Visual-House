@@ -27,6 +27,11 @@ import {
  */
 
 export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+export const GOOGLE_GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+export const GOOGLE_OWNER_OAUTH_SCOPES = [
+  GOOGLE_DRIVE_SCOPE,
+  GOOGLE_GMAIL_SEND_SCOPE
+];
 export const PRODUCTION_DEFAULT_REDIRECT_URI = 'https://ap-visual-house-w627tfzezq-as.a.run.app/api/drive/oauth/callback';
 export const PRODUCTION_DEFAULT_CLIENT_ID = '761522439396-bphkf3ir4agk518k3d4iu3ovf85docqh.apps.googleusercontent.com';
 const STATE_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes
@@ -55,6 +60,7 @@ export interface DriveStatusResponse {
 
 // In-memory cache for fast reuse across requests within the container
 let inMemoryCachedTokens: StoredDriveTokens | null = null;
+let forceDriveAuthFailureForTesting = false;
 
 export function getDriveClientId(): string {
   return (process.env.GOOGLE_DRIVE_CLIENT_ID || PRODUCTION_DEFAULT_CLIENT_ID).trim();
@@ -222,7 +228,7 @@ export async function generateOAuthStartUrl(customRedirectUri?: string): Promise
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent', // Guarantees a refresh token is issued even on re-authorization
-    scope: [GOOGLE_DRIVE_SCOPE],
+    scope: GOOGLE_OWNER_OAUTH_SCOPES,
     state,
     include_granted_scopes: false
   });
@@ -248,7 +254,7 @@ export async function getStoredDriveTokens(): Promise<StoredDriveTokens | null> 
   if (smRefreshToken) {
     inMemoryCachedTokens = {
       refresh_token: smRefreshToken,
-      scope: GOOGLE_DRIVE_SCOPE,
+      scope: GOOGLE_OWNER_OAUTH_SCOPES.join(' '),
       updatedAt: Date.now()
     };
     return inMemoryCachedTokens;
@@ -281,7 +287,7 @@ export async function saveDriveTokens(tokens: {
     refresh_token: refreshToken,
     access_token: tokens.access_token || existing?.access_token,
     expiry_date: tokens.expiry_date || existing?.expiry_date,
-    scope: tokens.scope || existing?.scope || GOOGLE_DRIVE_SCOPE,
+    scope: tokens.scope || existing?.scope || GOOGLE_OWNER_OAUTH_SCOPES.join(' '),
     updatedAt: Date.now()
   };
 
@@ -324,9 +330,40 @@ export async function exchangeCodeForTokens(
 }
 
 /**
+ * Returns a configured Gmail v1 client authenticated with the owner's OAuth grant.
+ * The same owner refresh token used for Drive is reused for Gmail send access.
+ */
+export async function getAuthenticatedGmailClient() {
+  if (forceDriveAuthFailureForTesting) {
+    throw new Error('Google Gmail authentication unavailable (test simulation).');
+  }
+
+  const tokens = await getStoredDriveTokens();
+  if (!tokens || !tokens.refresh_token) {
+    throw new Error('Google Gmail is not authorized by the owner. Please initiate authorization at /api/drive/oauth/start.');
+  }
+
+  const oauth2Client = await createOAuth2Client();
+  oauth2Client.setCredentials({
+    refresh_token: tokens.refresh_token,
+    access_token: tokens.access_token,
+    expiry_date: tokens.expiry_date
+  });
+
+  return google.gmail({
+    version: 'v1',
+    auth: oauth2Client
+  });
+}
+
+/**
  * Returns a configured Google Drive v3 client authenticated with the owner's refresh token.
  */
 export async function getAuthenticatedDriveClient() {
+  if (forceDriveAuthFailureForTesting) {
+    throw new Error('Google Drive authentication unavailable (test simulation).');
+  }
+
   const tokens = await getStoredDriveTokens();
   if (!tokens || !tokens.refresh_token) {
     throw new Error('Google Drive is not authorized by the owner. Please initiate authorization at /api/drive/oauth/start.');
@@ -384,7 +421,7 @@ export async function getDriveStatus(): Promise<DriveStatusResponse> {
   return {
     configured,
     connected,
-    scope: GOOGLE_DRIVE_SCOPE,
+    scope: GOOGLE_OWNER_OAUTH_SCOPES.join(' '),
     storageMethod,
     tokenAvailable: connected,
     redirectUriConfigured: getDriveRedirectUri(),
@@ -401,5 +438,10 @@ export async function getDriveStatus(): Promise<DriveStatusResponse> {
  */
 export function _resetTokenCacheForTesting() {
   inMemoryCachedTokens = null;
+  forceDriveAuthFailureForTesting = false;
   _resetSecretCacheForTesting();
+}
+
+export function _setDriveAuthFailureForTesting(enabled: boolean) {
+  forceDriveAuthFailureForTesting = enabled;
 }
