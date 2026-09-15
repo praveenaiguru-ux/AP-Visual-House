@@ -9,6 +9,7 @@ interface ServiceProjectRequestProps {
   startingPrice: number;
   currency: string;
   uploadConfig?: ServiceUploadConfig;
+  onSubmissionStateChange?: (submitted: boolean) => void;
 }
 
 /**
@@ -65,7 +66,8 @@ export default function ServiceProjectRequest({
   serviceName,
   startingPrice,
   currency,
-  uploadConfig
+  uploadConfig,
+  onSubmissionStateChange
 }: ServiceProjectRequestProps) {
   const [name, setName] = useState('');
   const [countryCode, setCountryCode] = useState('+91');
@@ -592,6 +594,7 @@ export default function ServiceProjectRequest({
         filesAttached: data.filesAttached
       });
       setIsSubmitted(true);
+      onSubmissionStateChange?.(true);
     } catch (err: any) {
       console.error('Submission failed:', err);
       setError(err.message || 'Submission failed. Please try again.');
@@ -668,7 +671,10 @@ export default function ServiceProjectRequest({
                 {managedFiles.length > 0 && (
                   <div className="flex justify-between py-1">
                     <span className="text-foreground/50 font-medium">Files Attached:</span>
-                    <span className="font-semibold">{submittedProjectData?.filesAttached ?? managedFiles.length} file(s) staged</span>
+                    <span className="font-semibold">
+                      {submittedProjectData?.filesAttached ?? managedFiles.length}{' '}
+                      {(submittedProjectData?.filesAttached ?? managedFiles.length) === 1 ? 'file' : 'files'} attached
+                    </span>
                   </div>
                 )}
               </div>
@@ -687,6 +693,7 @@ export default function ServiceProjectRequest({
                   type="button"
                   onClick={() => {
                     setIsSubmitted(false);
+                    onSubmissionStateChange?.(false);
                     setCountryCode('+91');
                     setWhatsapp('');
                     setRequirements('');

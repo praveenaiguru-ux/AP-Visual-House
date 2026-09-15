@@ -1,5 +1,5 @@
 import { useParams, Link } from 'react-router-dom';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import {
   services,
@@ -26,6 +26,7 @@ import ServiceCTA from '../components/service-detail/ServiceCTA';
 
 export default function ServiceDetail() {
   const { categorySlug, serviceSlug, slug } = useParams();
+  const [hasSubmittedProject, setHasSubmittedProject] = useState(false);
   const activeSlug = serviceSlug || slug;
 
   // Resolve service from data
@@ -231,15 +232,18 @@ export default function ServiceDetail() {
           startingPrice={detail.startingPrice}
           currency={detail.currency}
           uploadConfig={detail.uploadConfig}
+          onSubmissionStateChange={setHasSubmittedProject}
         />
 
         {/* 10. Final Call to Action */}
-        <ServiceCTA
-          serviceName={detail.name}
-          startingPrice={detail.startingPrice}
-          currency={detail.currency}
-          onStartProject={handleStartProject}
-        />
+        {!hasSubmittedProject && (
+          <ServiceCTA
+            serviceName={detail.name}
+            startingPrice={detail.startingPrice}
+            currency={detail.currency}
+            onStartProject={handleStartProject}
+          />
+        )}
       </main>
     </div>
   );
