@@ -117,6 +117,8 @@ export interface ServiceDetailData {
   revisionPolicy: string;
   formats: string[];
   heroImage: string;
+  heroCaption?: string;
+  heroSubcaption?: string;
   galleryImages: ServiceExample[];
   whatWeCreate: {
     title: string;

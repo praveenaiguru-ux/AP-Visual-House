@@ -88,8 +88,12 @@ export default function ServiceHero({ detail, onStartProject }: ServiceHeroProps
             {/* Image overlay badge */}
             <div className="absolute bottom-4 left-4 right-4 bg-foreground/90 backdrop-blur-md text-background p-3.5 rounded-lg border border-white/10 flex items-center justify-between text-xs">
               <div>
-                <p className="font-semibold text-white tracking-wide">Custom Cartoon Stylization</p>
-                <p className="text-white/60 text-[11px]">Individually crafted from personal photos</p>
+                <p className="font-semibold text-white tracking-wide">
+                  {detail.heroCaption || detail.name}
+                </p>
+                <p className="text-white/60 text-[11px]">
+                  {detail.heroSubcaption || 'Thoughtfully crafted for your project'}
+                </p>
               </div>
               <span className="px-2.5 py-1 bg-[#D4AF37]/15 text-[#D4AF37] border border-[#D4AF37]/30 text-[10px] font-bold rounded uppercase tracking-wider">
                 Original Art
