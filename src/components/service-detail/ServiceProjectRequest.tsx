@@ -71,6 +71,7 @@ export default function ServiceProjectRequest({
 }: ServiceProjectRequestProps) {
   const [name, setName] = useState('');
   const [countryCode, setCountryCode] = useState('+91');
+  const [customCountryCode, setCustomCountryCode] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [email, setEmail] = useState('');
   const [requirements, setRequirements] = useState('');
@@ -89,6 +90,7 @@ export default function ServiceProjectRequest({
   const [requestId] = useState<string>(() => 'req_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36));
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const confirmationRef = useRef<HTMLDivElement>(null);
   const activeXhrRef = useRef<XMLHttpRequest | null>(null);
   const isCancelledRef = useRef<boolean>(false);
 
@@ -475,7 +477,13 @@ export default function ServiceProjectRequest({
       return;
     }
 
-    const normalizedWhatsapp = normalizePhoneNumber(countryCode, whatsapp);
+    const effectiveCountryCode =
+      countryCode === 'OTHER' ? customCountryCode.replace(/\D/g, '') : countryCode;
+
+    const normalizedWhatsapp = normalizePhoneNumber(
+      countryCode === 'OTHER' ? `+${effectiveCountryCode}` : effectiveCountryCode,
+      whatsapp
+    );
 
     if (!isValidE164Phone(normalizedWhatsapp)) {
       setError('Please enter a valid WhatsApp number with the correct country code.');
@@ -619,6 +627,16 @@ export default function ServiceProjectRequest({
     (f) => f.status === 'uploading' || f.status === 'uploaded' || f.status === 'cancelled' || f.status === 'error'
   );
 
+  // Scroll the customer directly to the confirmation after a successful submission.
+  useEffect(() => {
+    if (!isSubmitted || !confirmationRef.current) return;
+
+    confirmationRef.current.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    });
+  }, [isSubmitted]);
+
   // Prefilled WhatsApp message
   const whatsappPreFilled = `Hi AP Visual House! I just submitted a project request for ${serviceName} (Ref: ${submittedProjectData?.projectId || 'New'}). My name is ${name || '[Name]'}.`;
 
@@ -639,7 +657,10 @@ export default function ServiceProjectRequest({
 
         <div className="bg-white border border-foreground/10 rounded-2xl p-6 sm:p-10 shadow-sm relative">
           {isSubmitted ? (
-            <div className="py-8 text-center flex flex-col items-center">
+            <div
+              ref={confirmationRef}
+              className="py-8 text-center flex flex-col items-center scroll-mt-24"
+            >
               <div className="w-16 h-16 rounded-full bg-[#25D366]/10 text-[#25D366] flex items-center justify-center mb-6">
                 <CheckCircle2 className="w-8 h-8" />
               </div>
@@ -759,15 +780,39 @@ export default function ServiceProjectRequest({
                       aria-label="Country calling code"
                       disabled={isUploading || isSubmitting}
                       value={countryCode}
-                      onChange={(e) => setCountryCode(e.target.value)}
-                      className="w-[42%] sm:w-[38%] px-3 py-3 bg-white border border-foreground/20 rounded-lg text-foreground text-sm focus:outline-none focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] transition-all disabled:opacity-60"
+                      onChange={(e) => {
+                        setCountryCode(e.target.value);
+                        if (e.target.value !== 'OTHER') {
+                          setCustomCountryCode('');
+                        }
+                      }}
+                      className="w-[42%] sm:w-[38%] px-2 sm:px-3 py-3 bg-white border border-foreground/20 rounded-lg text-foreground text-sm focus:outline-none focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] transition-all disabled:opacity-60"
                     >
                       {COUNTRY_CODES.map((country) => (
                         <option key={country.code} value={country.code}>
-                          {country.code}
+                          {country.flag} {country.code}
                         </option>
                       ))}
+                      <option value="OTHER">Other</option>
                     </select>
+
+                    {countryCode === 'OTHER' && (
+                      <input
+                        id="client-custom-country-code"
+                        type="tel"
+                        inputMode="tel"
+                        autoComplete="tel-country-code"
+                        aria-label="Other country calling code"
+                        value={customCountryCode ? `+${customCountryCode}` : ''}
+                        onChange={(e) => {
+                          const digitsOnly = e.target.value.replace(/\D/g, '');
+                          setCustomCountryCode(digitsOnly);
+                        }}
+                        placeholder="+Code"
+                        disabled={isUploading || isSubmitting}
+                        className="w-[24%] sm:w-[22%] px-2 sm:px-3 py-3 bg-white border border-foreground/20 rounded-lg text-foreground placeholder:text-foreground/40 text-sm focus:outline-none focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37] transition-all disabled:opacity-60"
+                      />
+                    )}
 
                     <input
                       id="client-whatsapp-number"
