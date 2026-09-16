@@ -480,6 +480,13 @@ export default function ServiceProjectRequest({
     const effectiveCountryCode =
       countryCode === 'OTHER' ? customCountryCode.replace(/\D/g, '') : countryCode;
 
+    const localWhatsappDigits = whatsapp.replace(/\D/g, '');
+
+    if (effectiveCountryCode === '+91' && !/^\d{10}$/.test(localWhatsappDigits)) {
+      setError('Please enter a valid 10-digit Indian mobile number.');
+      return;
+    }
+
     const normalizedWhatsapp = normalizePhoneNumber(
       countryCode === 'OTHER' ? `+${effectiveCountryCode}` : effectiveCountryCode,
       whatsapp
