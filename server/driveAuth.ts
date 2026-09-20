@@ -4,6 +4,7 @@ import {
   SECRET_NAMES,
   getSecretValue,
   persistSecretVersion,
+  getRefreshTokenSecretName,
   _resetSecretCacheForTesting
 } from './secretManager';
 
@@ -19,7 +20,8 @@ import {
  * - Stateless CSRF Protection: Cryptographically signed HMAC-SHA256 state token with timestamp.
  * - Google Cloud Secret Manager Token Persistence:
  *   Owner refresh token is managed strictly via Google Cloud Secret Manager
- *   (`google-drive-refresh-token`) in project `gen-lang-client-0268928491`.
+ *   (`google-drive-refresh-token` in Production or `google-drive-staging-refresh-token`
+ *   in Staging) in project `gen-lang-client-0268928491`.
  *   The customer GCS bucket is NEVER used for credential or token storage.
  * - Strict Zero-Leak Security: Client secrets, refresh tokens, access tokens, and authorization
  *   codes are NEVER logged, returned in JSON, or rendered to HTML.
@@ -239,7 +241,7 @@ export async function generateOAuthStartUrl(customRedirectUri?: string): Promise
 /**
  * Loads the stored tokens from:
  * 1. In-memory cache
- * 2. Google Cloud Secret Manager (google-drive-refresh-token / GOOGLE_DRIVE_REFRESH_TOKEN)
+ * 2. Google Cloud Secret Manager using the environment-selected refresh-token secret.
  *
  * NOTE: GCS is STRICTLY NOT USED for credential storage.
  */
@@ -250,7 +252,11 @@ export async function getStoredDriveTokens(): Promise<StoredDriveTokens | null> 
   }
 
   // 2. Query Google Cloud Secret Manager (or mounted environment variable)
-  const smRefreshToken = await getSecretValue(SECRET_NAMES.REFRESH_TOKEN, 'GOOGLE_DRIVE_REFRESH_TOKEN');
+  const refreshTokenSecretName = getRefreshTokenSecretName();
+  const smRefreshToken = await getSecretValue(
+    refreshTokenSecretName,
+    process.env.APP_ENV === 'staging' ? undefined : 'GOOGLE_DRIVE_REFRESH_TOKEN'
+  );
   if (smRefreshToken) {
     inMemoryCachedTokens = {
       refresh_token: smRefreshToken,
@@ -266,7 +272,7 @@ export async function getStoredDriveTokens(): Promise<StoredDriveTokens | null> 
 /**
  * Persists the owner's refresh token into:
  * 1. In-memory cache
- * 2. Google Cloud Secret Manager (`google-drive-refresh-token`)
+ * 2. Google Cloud Secret Manager using the environment-selected refresh-token secret
  *
  * Under NO circumstances is the refresh token written to the customer GCS bucket.
  */
@@ -296,7 +302,7 @@ export async function saveDriveTokens(tokens: {
 
   // Persist to Google Cloud Secret Manager
   const { savedToSecretManager, error } = await persistSecretVersion(
-    SECRET_NAMES.REFRESH_TOKEN,
+    getRefreshTokenSecretName(),
     refreshToken
   );
 
@@ -428,7 +434,7 @@ export async function getDriveStatus(): Promise<DriveStatusResponse> {
     clientIdConfigured: Boolean(clientId),
     clientSecretConfigured: Boolean(clientSecret),
     hmacSecretConfigured: hmacConfigured,
-    secretManagerSecret: SECRET_NAMES.REFRESH_TOKEN,
+    secretManagerSecret: getRefreshTokenSecretName(),
     statusMessage
   };
 }
