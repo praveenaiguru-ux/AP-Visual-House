@@ -5,7 +5,8 @@ import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
  *
  * Provides least-privilege, production-grade access to Secret Manager credentials:
  * - google-drive-client-secret: OAuth 2.0 Web Client Secret
- * - google-drive-refresh-token: Owner Google Drive OAuth Refresh Token
+ * - google-drive-refresh-token: Production owner Google Drive OAuth Refresh Token
+ * - google-drive-staging-refresh-token: Staging owner Google Drive OAuth Refresh Token
  * - drive-oauth-hmac-secret: OAuth state HMAC signing secret
  *
  * Target Service Account:
@@ -23,8 +24,15 @@ import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 export const SECRET_NAMES = {
   CLIENT_SECRET: 'google-drive-client-secret',
   REFRESH_TOKEN: 'google-drive-refresh-token',
+  STAGING_REFRESH_TOKEN: 'google-drive-staging-refresh-token',
   HMAC_SECRET: 'drive-oauth-hmac-secret'
 } as const;
+
+export function getRefreshTokenSecretName(): string {
+  return process.env.APP_ENV === 'staging'
+    ? SECRET_NAMES.STAGING_REFRESH_TOKEN
+    : SECRET_NAMES.REFRESH_TOKEN;
+}
 
 export const TARGET_GCP_PROJECT_ID =
   process.env.GCP_PROJECT_ID ||
@@ -72,7 +80,9 @@ export async function getSecretValue(
   }
 
   // 2. For the dynamic refresh token, query Secret Manager API first to get real-time latest version
-  const isDynamicSecret = secretName === SECRET_NAMES.REFRESH_TOKEN;
+  const isDynamicSecret =
+    secretName === SECRET_NAMES.REFRESH_TOKEN ||
+    secretName === SECRET_NAMES.STAGING_REFRESH_TOKEN;
 
   if (isDynamicSecret) {
     try {
