@@ -255,7 +255,7 @@ export async function getStoredDriveTokens(): Promise<StoredDriveTokens | null> 
   const refreshTokenSecretName = getRefreshTokenSecretName();
   const smRefreshToken = await getSecretValue(
     refreshTokenSecretName,
-    'GOOGLE_DRIVE_REFRESH_TOKEN'
+    process.env.APP_ENV === 'staging' ? undefined : 'GOOGLE_DRIVE_REFRESH_TOKEN'
   );
   if (smRefreshToken) {
     inMemoryCachedTokens = {
