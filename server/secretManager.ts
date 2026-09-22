@@ -73,13 +73,8 @@ export async function getSecretValue(
   secretName: string,
   envVarName?: string
 ): Promise<string | null> {
-  // 1. Check in-memory cache
-  if (secretCache.has(secretName)) {
-    const cached = secretCache.get(secretName);
-    if (!isPlaceholder(cached)) return cached!;
-  }
-
-  // 2. For the dynamic refresh token, query Secret Manager API first to get real-time latest version
+  // Refresh tokens are dynamic credentials and must always read the latest
+  // Secret Manager version. Do not return a stale container-level cache value.
   const isDynamicSecret =
     secretName === SECRET_NAMES.REFRESH_TOKEN ||
     secretName === SECRET_NAMES.STAGING_REFRESH_TOKEN;
@@ -91,9 +86,7 @@ export async function getSecretValue(
       const [version] = await client.accessSecretVersion({ name });
       const payload = version.payload?.data?.toString();
       if (!isPlaceholder(payload)) {
-        const trimmed = payload!.trim();
-        secretCache.set(secretName, trimmed);
-        return trimmed;
+        return payload!.trim();
       }
     } catch (err: any) {
       // Expected when unconfigured, no version added yet, or in test/mock environment
