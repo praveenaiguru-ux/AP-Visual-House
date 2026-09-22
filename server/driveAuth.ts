@@ -246,24 +246,20 @@ export async function generateOAuthStartUrl(customRedirectUri?: string): Promise
  * NOTE: GCS is STRICTLY NOT USED for credential storage.
  */
 export async function getStoredDriveTokens(): Promise<StoredDriveTokens | null> {
-  // 1. Check in-memory cache
-  if (inMemoryCachedTokens && inMemoryCachedTokens.refresh_token) {
-    return inMemoryCachedTokens;
-  }
-
-  // 2. Query Google Cloud Secret Manager (or mounted environment variable)
+  // Refresh tokens are authoritative in Secret Manager.
+  // Do not reuse a long-lived container-level cache here because OAuth reauthorization
+  // can rotate the refresh token while an existing Cloud Run instance remains alive.
   const refreshTokenSecretName = getRefreshTokenSecretName();
   const smRefreshToken = await getSecretValue(
     refreshTokenSecretName,
     process.env.APP_ENV === 'staging' ? undefined : 'GOOGLE_DRIVE_REFRESH_TOKEN'
   );
   if (smRefreshToken) {
-    inMemoryCachedTokens = {
+    return {
       refresh_token: smRefreshToken,
       scope: GOOGLE_OWNER_OAUTH_SCOPES.join(' '),
       updatedAt: Date.now()
     };
-    return inMemoryCachedTokens;
   }
 
   return null;
