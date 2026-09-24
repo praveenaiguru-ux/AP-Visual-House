@@ -5,7 +5,7 @@ export const categories: CategoryDetails[] = [
     id: 'ai-images',
     slug: 'ai-image-creation',
     shortTitle: 'AI Images',
-    title: 'AI Image Creation',
+    title: 'AI & Personal',
     description: 'Personalized portraits, stylized artwork, and creative digital character illustrations crafted with artistic precision.',
     image: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=800'
   },
@@ -21,7 +21,7 @@ export const categories: CategoryDetails[] = [
     id: '3d-visualization',
     slug: '3d-architectural-visualization',
     shortTitle: '3D',
-    title: '3D & Architectural Visualization',
+    title: 'Home & Architecture',
     description: 'Transform architectural drawings, floor plans, and sketches into photorealistic 3D spatial renders, facades, and landscapes.',
     image: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&q=80&w=800'
   },
@@ -29,7 +29,7 @@ export const categories: CategoryDetails[] = [
     id: 'invitations',
     slug: 'invitations-events',
     shortTitle: 'Invitations',
-    title: 'Invitations & Events',
+    title: 'Invitations & Celebrations',
     description: 'Handcrafted digital invitation suites and bespoke stationery designs for weddings, birthdays, baby showers, and festive occasions.',
     image: 'https://images.unsplash.com/photo-1519225421980-715cb0215aed?auto=format&fit=crop&q=80&w=800'
   },
@@ -37,7 +37,7 @@ export const categories: CategoryDetails[] = [
     id: 'product-creatives',
     slug: 'product-social-media-creatives',
     shortTitle: 'Product Creatives',
-    title: 'Product & Social Media Creatives',
+    title: 'Business & Social Media',
     description: 'Commercial advertisements, promotional posters, e-commerce enhancements, and social creatives built to elevate brand perception.',
     image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&q=80&w=800'
   },
@@ -45,7 +45,7 @@ export const categories: CategoryDetails[] = [
     id: 'video-ads',
     slug: 'video-ads',
     shortTitle: 'Video',
-    title: 'Video Ads',
+    title: 'Video & Motion',
     description: 'High-impact product videos, social reels, brand stories, and festive promotional campaigns designed for digital audiences.',
     image: 'https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?auto=format&fit=crop&q=80&w=800'
   }
