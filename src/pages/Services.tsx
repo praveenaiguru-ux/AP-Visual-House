@@ -1,8 +1,17 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { categories, services } from '../data/services';
 import { siteConfig } from '../config';
+import { loadCreativeManifest, resolveServiceImage } from '../lib/creativeAssets';
+import type { CreativeManifest } from '../lib/creativeAssets';
 
 export default function Services() {
+  const [creativeManifest, setCreativeManifest] = useState<CreativeManifest | null>(null);
+
+  useEffect(() => {
+    loadCreativeManifest().then(setCreativeManifest);
+  }, []);
+
   return (
     <div className="pt-12 pb-24 bg-background">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
