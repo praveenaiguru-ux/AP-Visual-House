@@ -38,7 +38,7 @@ export default function Services() {
                     >
                       <div className="relative aspect-[16/10] overflow-hidden bg-foreground/5">
                         <img 
-                          src={service.image} 
+                          src={resolveServiceImage(service.id, service.image, creativeManifest)} 
                           alt={service.title} 
                           loading="lazy"
                           className="object-cover w-full h-full group-hover:scale-105 transition-transform duration-500" 
