@@ -8,11 +8,11 @@ export type CreativeManifest = Record<string, CreativeManifestEntry>;
 
 let manifestPromise: Promise<CreativeManifest | null> | null = null;
 
-const DEFAULT_MANIFEST_PATH = '/config/service-creatives.json';
+const DEFAULT_MANIFEST_URL = 'https://storage.googleapis.com/ap-visual-house-assets-0268928491/config/service-creatives.json';
 
 const getManifestUrl = (): string => {
   const configured = import.meta.env.VITE_CREATIVE_MANIFEST_URL?.trim();
-  return configured || DEFAULT_MANIFEST_PATH;
+  return configured || DEFAULT_MANIFEST_URL;
 };
 
 export const loadCreativeManifest = async (): Promise<CreativeManifest | null> => {
