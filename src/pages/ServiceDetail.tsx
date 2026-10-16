@@ -9,6 +9,8 @@ import {
   getCategoryBySlug
 } from '../data/services';
 import { ServiceDetailData } from '../types';
+import { loadCreativeManifest, resolveServiceImage } from '../lib/creativeAssets';
+import type { CreativeManifest } from '../lib/creativeAssets';
 
 // Modular Service Detail Components
 import ServiceSEO from '../components/service-detail/ServiceSEO';
@@ -27,6 +29,11 @@ import ServiceCTA from '../components/service-detail/ServiceCTA';
 export default function ServiceDetail() {
   const { categorySlug, serviceSlug, slug } = useParams();
   const [hasSubmittedProject, setHasSubmittedProject] = useState(false);
+  const [creativeManifest, setCreativeManifest] = useState<CreativeManifest | null>(null);
+
+  useEffect(() => {
+    loadCreativeManifest().then(setCreativeManifest);
+  }, []);
   const activeSlug = serviceSlug || slug;
 
   // Resolve service from data
@@ -170,77 +177,84 @@ export default function ServiceDetail() {
     };
   }, [service]);
 
+  // Use the runtime manifest for the detail hero as well as the catalogue tile.
+  // Only service IDs present in the manifest are overridden; other images keep their configured fallback.
+  const resolvedDetail = useMemo(() => ({
+    ...detail,
+    heroImage: resolveServiceImage(service.id, detail.heroImage, creativeManifest),
+  }), [detail, service.id, creativeManifest]);
+
   // Resolve related services list
   const relatedServicesList = useMemo(() => {
-    return (detail.relatedServices || [])
+    return (resolvedDetail.relatedServices || [])
       .map((relSlug) => services.find((s) => s.slug === relSlug))
       .filter((s): s is typeof services[0] => Boolean(s));
-  }, [detail.relatedServices]);
+  }, [resolvedDetail.relatedServices]);
 
   return (
     <div className="bg-background text-foreground min-h-screen pb-20">
       {/* Dynamic SEO Meta & Structured Data */}
-      <ServiceSEO detail={detail} canonicalPath={canonicalPath} />
+      <ServiceSEO detail={resolvedDetail} canonicalPath={canonicalPath} />
 
       <main className="container mx-auto px-4 sm:px-6 lg:px-8 pt-8">
         {/* Breadcrumb Navigation */}
         <ServiceBreadcrumbs
           categoryTitle={categoryDetails.title}
           categorySlug={categoryDetails.slug || 'ai-image-creation'}
-          serviceTitle={detail.name}
+          serviceTitle={resolvedDetail.name}
         />
 
         {/* 1. Hero Section */}
         <ServiceHero
-          detail={detail}
+          detail={resolvedDetail}
           onStartProject={handleStartProject}
         />
 
         {/* 2. Quotation & Pricing Block */}
         <div className="mt-12">
-          <ServicePricingCard detail={detail} />
+          <ServicePricingCard detail={resolvedDetail} />
         </div>
 
         {/* 3. What We Create */}
-        <ServiceWhatWeCreate detail={detail} />
+        <ServiceWhatWeCreate detail={resolvedDetail} />
 
         {/* 4. What You Provide & What You Receive */}
-        <ServiceDeliverables detail={detail} />
+        <ServiceDeliverables detail={resolvedDetail} />
 
         {/* 5. See What We Can Create (Visual Showcase) */}
-        {detail.galleryImages && detail.galleryImages.length > 0 && (
-          <ServiceExamples examples={detail.galleryImages} />
+        {resolvedDetail.galleryImages && resolvedDetail.galleryImages.length > 0 && (
+          <ServiceExamples examples={resolvedDetail.galleryImages} />
         )}
 
         {/* 6. How It Works (5 Steps) */}
         <ServiceProcess />
 
         {/* 7. Frequently Asked Questions */}
-        {detail.faq && detail.faq.length > 0 && (
-          <ServiceFAQ faqs={detail.faq} />
+        {resolvedDetail.faq && resolvedDetail.faq.length > 0 && (
+          <ServiceFAQ faqs={resolvedDetail.faq} />
         )}
 
         {/* 8. Related Services (You May Also Like) */}
         <RelatedServices
           services={relatedServicesList}
-          currentSlug={detail.slug}
+          currentSlug={resolvedDetail.slug}
         />
 
         {/* 9. Project Request Flow (Concierge Form) */}
         <ServiceProjectRequest
-          serviceName={detail.name}
-          startingPrice={detail.startingPrice}
-          currency={detail.currency}
-          uploadConfig={detail.uploadConfig}
+          serviceName={resolvedDetail.name}
+          startingPrice={resolvedDetail.startingPrice}
+          currency={resolvedDetail.currency}
+          uploadConfig={resolvedDetail.uploadConfig}
           onSubmissionStateChange={setHasSubmittedProject}
         />
 
         {/* 10. Final Call to Action */}
         {!hasSubmittedProject && (
           <ServiceCTA
-            serviceName={detail.name}
-            startingPrice={detail.startingPrice}
-            currency={detail.currency}
+            serviceName={resolvedDetail.name}
+            startingPrice={resolvedDetail.startingPrice}
+            currency={resolvedDetail.currency}
             onStartProject={handleStartProject}
           />
         )}
